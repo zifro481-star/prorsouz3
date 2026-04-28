@@ -1,0 +1,34 @@
+AGENTS.md
+CLAUDE.md
+ssh_cmd.py
+.claude/
+
+# Dependencies and generated output
+node_modules/
+.expo/
+.jdk/
+dist/
+build/
+.gradle/
+
+# Local configuration and secrets
+.env
+.env.*
+local.properties
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.pem
+
+# Build artifacts
+*.apk
+*.aab
+*.jsbundle
+
+# OS/editor files
+.DS_Store
+.idea/
+*.iml
