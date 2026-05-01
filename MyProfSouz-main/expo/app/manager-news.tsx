@@ -4,7 +4,7 @@ import {
   TextInput, Alert, ActivityIndicator, RefreshControl,
 } from 'react-native';
 import { Stack } from 'expo-router';
-import { Archive, Image as ImageIcon, Pencil, Pin, Trash2, Video } from 'lucide-react-native';
+import { Archive, Image as ImageIcon, Pencil, Pin, Video } from 'lucide-react-native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/services/api';
 import Colors from '@/constants/colors';
@@ -47,6 +47,10 @@ function getStatus(item: ManagedNews): StatusFilter {
   return 'published';
 }
 
+function getNewsId(item: ManagedNews): string {
+  return String((item as any).id ?? (item as any)._id ?? (item as any).newsId ?? '');
+}
+
 export default function ManagerNewsScreen() {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<NewsDraft>(emptyDraft);
@@ -86,14 +90,14 @@ export default function ManagerNewsScreen() {
   });
 
   const archiveMutation = useMutation({
-    mutationFn: (id: string) => api.updateNews(id, { status: 'archive' } as Partial<ManagedNews>),
+    mutationFn: (item: ManagedNews) => api.archiveNews(item),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['news'] }),
     onError: (error: Error) => Alert.alert('Ошибка', error.message || 'Не удалось перенести новость в архив'),
   });
 
   const startEdit = useCallback((item: ManagedNews) => {
     setDraft({
-      id: item.id,
+      id: getNewsId(item),
       title: item.title ?? '',
       summary: item.summary ?? '',
       content: item.content ?? '',
@@ -174,8 +178,9 @@ export default function ManagerNewsScreen() {
         {!newsQuery.isLoading && filteredNews.length === 0 ? <Text style={styles.empty}>Новостей пока нет</Text> : null}
         {filteredNews.map((item) => {
           const status = getStatus(item);
+          const isArchiving = archiveMutation.isPending && getNewsId(archiveMutation.variables as ManagedNews) === getNewsId(item);
           return (
-            <View key={item.id} style={styles.card}>
+            <View key={getNewsId(item)} style={styles.card}>
               <View style={styles.cardHeader}>
                 <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
                 <View style={[styles.statusBadge, status === 'archive' && styles.archiveBadge, status === 'draft' && styles.draftBadge]}>
@@ -192,8 +197,8 @@ export default function ManagerNewsScreen() {
                   <Pencil color={Colors.primary} size={17} />
                   <Text style={styles.editButtonText}>Редактировать</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.archiveButton} onPress={() => archiveMutation.mutate(item.id)}>
-                  <Trash2 color={Colors.error} size={17} />
+                <TouchableOpacity style={styles.archiveButton} onPress={() => archiveMutation.mutate(item)} disabled={isArchiving}>
+                  {isArchiving ? <ActivityIndicator color={Colors.error} size="small" /> : <Archive color={Colors.error} size={17} />}
                   <Text style={styles.archiveButtonText}>В архив</Text>
                 </TouchableOpacity>
               </View>

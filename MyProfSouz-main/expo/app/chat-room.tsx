@@ -19,6 +19,7 @@ export default function ChatRoomScreen() {
   const queryClient = useQueryClient();
   const [text, setText] = useState('');
   const flatListRef = useRef<FlatList>(null);
+  const lastMarkedReadRef = useRef<string>('');
   const isConversation = chatType === 'conversation';
 
   const messagesQuery = useQuery({
@@ -36,6 +37,15 @@ export default function ChatRoomScreen() {
     if (Array.isArray(data)) return data as unknown as ChatMessage[];
     return [];
   }, [messagesQuery.data]);
+
+  const latestMessageAt = useMemo(() => {
+    return messages.reduce<string | undefined>((latest, item) => {
+      const createdAt = (item as any).createdAt || (item as any).updatedAt;
+      if (!createdAt) return latest;
+      if (!latest || new Date(createdAt).getTime() > new Date(latest).getTime()) return createdAt;
+      return latest;
+    }, undefined);
+  }, [messages]);
 
   const sendMutation = useMutation({
     mutationFn: (msg: string) => isConversation
@@ -62,6 +72,28 @@ export default function ChatRoomScreen() {
       }, 100);
     }
   }, [messages.length]);
+
+  useEffect(() => {
+    if (!chatId || !messagesQuery.isSuccess) return;
+
+    const type = isConversation ? 'conversation' : 'direct';
+    const readAt = latestMessageAt || new Date().toISOString();
+    const markKey = `${type}:${chatId}:${readAt}`;
+    if (lastMarkedReadRef.current === markKey) return;
+    lastMarkedReadRef.current = markKey;
+
+    const clearUnread = (current: unknown) => Array.isArray(current)
+      ? current.map((chat: any) => String(chat?.id ?? chat?._id ?? '') === String(chatId) ? { ...chat, unreadCount: 0 } : chat)
+      : current;
+
+    queryClient.setQueryData(['direct-chats'], clearUnread);
+    queryClient.setQueryData(['conversations'], clearUnread);
+
+    void api.markChatRead(type, chatId, readAt).finally(() => {
+      void queryClient.invalidateQueries({ queryKey: ['direct-chats'] });
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    });
+  }, [chatId, isConversation, latestMessageAt, messagesQuery.isSuccess, queryClient]);
 
   // Get agentId from profile for matching senderId in conversations
   const profileQuery = useQuery({

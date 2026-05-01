@@ -10,6 +10,7 @@ const BASE_URL = 'https://profsouz.info/api';
 const LOCAL_LEADS_KEY = 'local_leads';
 const LOCAL_NOTIFICATIONS_KEY = 'local_notifications';
 const LOCAL_READ_NOTIFICATION_IDS_KEY = 'local_read_notification_ids';
+const LOCAL_READ_CHAT_STATE_KEY = 'local_read_chat_state';
 const LOCAL_NEWS_KEY = 'local_news';
 const LOCAL_EVENTS_KEY = 'local_events';
 const APP_RATING_SURVEY_ID = 'app-platform-rating';
@@ -211,6 +212,10 @@ async function setLocalJson<T>(key: string, value: T): Promise<void> {
   await AsyncStorage.setItem(key, JSON.stringify(value));
 }
 
+function getRecordId(item: Record<string, any> | null | undefined): string {
+  return String(item?.id ?? item?._id ?? item?.newsId ?? item?.chatId ?? item?.conversationId ?? '');
+}
+
 async function getLocalLeads(): Promise<Lead[]> {
   return getLocalJson<Lead[]>(LOCAL_LEADS_KEY, []);
 }
@@ -256,10 +261,10 @@ async function saveLocalNews(data: Partial<NewsItem>): Promise<NewsItem> {
 
 async function updateLocalNews(id: string, data: Partial<NewsItem>): Promise<NewsItem> {
   const items = await getLocalNews();
-  const existing = items.find((item) => item.id === id);
+  const existing = items.find((item) => getRecordId(item as any) === id);
   if (!existing) throw new Error('Новость не найдена');
   const updated = { ...existing, ...data };
-  await setLocalNews(items.map((item) => item.id === id ? updated : item));
+  await setLocalNews(items.map((item) => getRecordId(item as any) === id ? updated : item));
   return updated;
 }
 
@@ -324,12 +329,42 @@ async function markAppRatingSurveyCompleted(): Promise<void> {
   await setLocalJson('survey_completions', { ...completions, [APP_RATING_SURVEY_ID]: true });
 }
 
-function uniqById<T extends { id: string }>(items: T[]): T[] {
+function uniqById<T extends Record<string, any>>(items: T[]): T[] {
   const seen = new Set<string>();
-  return items.filter((item) => {
-    if (!item.id || seen.has(item.id)) return false;
-    seen.add(item.id);
+  return items.map((item) => {
+    const id = getRecordId(item);
+    return id && !item.id ? { ...item, id } as T : item;
+  }).filter((item) => {
+    const id = getRecordId(item);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
     return true;
+  });
+}
+
+async function getLocalReadChatState(): Promise<Record<string, string>> {
+  return getLocalJson<Record<string, string>>(LOCAL_READ_CHAT_STATE_KEY, {});
+}
+
+async function setLocalReadChatAt(type: 'direct' | 'conversation', id: string, readAt: string): Promise<void> {
+  const current = await getLocalReadChatState();
+  await setLocalJson(LOCAL_READ_CHAT_STATE_KEY, { ...current, [`${type}:${id}`]: readAt });
+}
+
+function getChatActivityAt(chat: Record<string, any>): string | undefined {
+  return chat.lastMessageAt || chat.updatedAt || chat.lastMessage?.createdAt || chat.lastMessage?.updatedAt;
+}
+
+async function applyLocalReadChatState<T extends Record<string, any>>(type: 'direct' | 'conversation', chats: T[]): Promise<T[]> {
+  const readState = await getLocalReadChatState();
+  return chats.map((chat) => {
+    const id = getRecordId(chat);
+    const readAt = readState[`${type}:${id}`];
+    if (!id || !readAt) return chat;
+
+    const activityAt = getChatActivityAt(chat);
+    const isLocallyRead = !activityAt || new Date(activityAt).getTime() <= new Date(readAt).getTime();
+    return isLocallyRead ? { ...chat, unreadCount: 0 } as T : chat;
   });
 }
 
@@ -677,8 +712,10 @@ export const api = {
     return results;
   },
 
-  getDirectChats: () =>
-    request<DirectChat[]>('/direct-chats'),
+  getDirectChats: async () => {
+    const chats = await request<DirectChat[]>('/direct-chats');
+    return applyLocalReadChatState('direct', Array.isArray(chats) ? chats as any[] : []) as Promise<DirectChat[]>;
+  },
 
   createDirectChat: (recipientId: string) =>
     request<DirectChat>('/direct-chats', {
@@ -695,8 +732,10 @@ export const api = {
       body: JSON.stringify({ text }),
     }),
 
-  getConversations: () =>
-    request<Conversation[]>('/conversations'),
+  getConversations: async () => {
+    const conversations = await request<Conversation[]>('/conversations');
+    return applyLocalReadChatState('conversation', Array.isArray(conversations) ? conversations as any[] : []) as Promise<Conversation[]>;
+  },
 
   createConversation: async (participantId: string) => {
     const payload = {
@@ -722,6 +761,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ text }),
     }),
+
+  markChatRead: async (type: 'direct' | 'conversation', id: string, readAt = new Date().toISOString()) => {
+    await setLocalReadChatAt(type, id, readAt);
+    const body = {
+      chatId: id,
+      directChatId: type === 'direct' ? id : undefined,
+      conversationId: type === 'conversation' ? id : undefined,
+      read: true,
+      readAt,
+    };
+    const base = type === 'direct' ? `/direct-chats/${id}` : `/conversations/${id}`;
+    const paths = [
+      `${base}/read`,
+      `${base}/mark-read`,
+      `${base}/messages/read`,
+      base,
+    ];
+    await tryJsonVariants<void>(paths, body, 'PATCH');
+    await tryJsonVariants<void>(paths.slice(0, 3), body);
+  },
 
   getAIChat: () =>
     request<AIChatResponse>('/ai-chat'),
@@ -788,11 +847,61 @@ export const api = {
 
   updateNews: async (id: string, data: Partial<NewsItem>) => {
     const result = await tryJsonVariants<NewsItem>(
-      [`/news/${id}`, `/manager/news/${id}`, `/admin/news/${id}`, `/announcements/${id}`],
+      [`/news/${id}`, `/manager/news/${id}`, `/admin/news/${id}`, `/announcements/${id}`, `/news/${id}/update`, `/manager/news/${id}/update`],
       { ...data, type: 'news' },
       'PATCH'
     );
-    return result ?? updateLocalNews(id, data);
+    if (result) return result;
+
+    const putResult = await tryJsonVariants<NewsItem>(
+      [`/news/${id}`, `/manager/news/${id}`, `/admin/news/${id}`, `/announcements/${id}`],
+      { ...data, type: 'news' },
+      'PUT'
+    );
+    if (putResult) return putResult;
+
+    const local = await getLocalNews();
+    if (local.some((item) => getRecordId(item as any) === id)) return updateLocalNews(id, data);
+    throw new Error('Не удалось сохранить новость на сервере');
+  },
+
+  archiveNews: async (item: Partial<NewsItem> & Record<string, any>) => {
+    const id = getRecordId(item);
+    if (!id) throw new Error('Не удалось определить новость');
+
+    const payloads = [
+      { ...item, status: 'archive', archived: true, isArchived: true, type: 'news' },
+      { ...item, status: 'archived', archived: true, isArchived: true, type: 'news' },
+      { status: 'archive', archived: true, isArchived: true, type: 'news' },
+      { status: 'archived', archived: true, isArchived: true, type: 'news' },
+    ];
+    const archivePaths = [
+      `/news/${id}/archive`,
+      `/manager/news/${id}/archive`,
+      `/admin/news/${id}/archive`,
+      `/announcements/${id}/archive`,
+    ];
+    const updatePaths = [
+      `/news/${id}`,
+      `/manager/news/${id}`,
+      `/admin/news/${id}`,
+      `/announcements/${id}`,
+    ];
+
+    for (const payload of payloads) {
+      const result =
+        (await tryJsonVariants<NewsItem>(archivePaths, payload, 'PATCH')) ??
+        (await tryJsonVariants<NewsItem>(archivePaths, payload)) ??
+        (await tryJsonVariants<NewsItem>(updatePaths, payload, 'PATCH')) ??
+        (await tryJsonVariants<NewsItem>(updatePaths, payload, 'PUT'));
+      if (result) return result;
+    }
+
+    const local = await getLocalNews();
+    if (local.some((news) => getRecordId(news as any) === id)) {
+      return updateLocalNews(id, { status: 'archive' } as Partial<NewsItem>);
+    }
+    throw new Error('Не удалось перенести новость в архив');
   },
 
   deleteNews: async (id: string) => {
