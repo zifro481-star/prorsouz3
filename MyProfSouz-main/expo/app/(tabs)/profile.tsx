@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LogOut, Edit3, Check, X, Shield, Building2, MapPin, Briefcase, Sun, Moon, Send, RefreshCw, Unlink, KeyRound } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from '@/contexts/ThemeContext';
 import { api } from '@/services/api';
@@ -30,6 +31,7 @@ function getRoleLabel(role?: string): string {
 }
 
 export default function ProfileScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, logout, updateUser } = useAuth();
   const { theme, toggleTheme, colors: themeColors } = useTheme();
@@ -41,9 +43,6 @@ export default function ProfileScreen() {
   const [editProfession, setEditProfession] = useState('');
   const [tgDeepLink, setTgDeepLink] = useState<string | null>(null);
   const [maxDeepLink, setMaxDeepLink] = useState<string | null>(null);
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
 
   const profileQuery = useQuery({
     queryKey: ['profile'],
@@ -104,19 +103,6 @@ export default function ProfileScreen() {
     },
   });
 
-  const changePasswordMutation = useMutation({
-    mutationFn: () => api.changePassword(currentPassword, newPassword),
-    onSuccess: () => {
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-      Alert.alert('Готово', 'Пароль изменён');
-    },
-    onError: (error: Error) => {
-      Alert.alert('Ошибка', error.message || 'Не удалось изменить пароль');
-    },
-  });
-
   const startEdit = useCallback(() => {
     setEditFullName(profile?.fullName ?? '');
     setEditPhone(profile?.phone ?? '');
@@ -133,22 +119,6 @@ export default function ProfileScreen() {
       profession: editProfession.trim(),
     });
   }, [editFullName, editPhone, editCity, editProfession, updateMutation]);
-
-  const handleChangePassword = useCallback(() => {
-    if (!currentPassword.trim()) {
-      Alert.alert('Внимание', 'Введите текущий пароль');
-      return;
-    }
-    if (newPassword.length < 8) {
-      Alert.alert('Внимание', 'Новый пароль должен быть не короче 8 символов');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      Alert.alert('Внимание', 'Новые пароли не совпадают');
-      return;
-    }
-    changePasswordMutation.mutate();
-  }, [changePasswordMutation, confirmPassword, currentPassword, newPassword]);
 
   const handleLogout = useCallback(() => {
     Alert.alert('Выход', 'Вы уверены, что хотите выйти?', [
@@ -454,55 +424,14 @@ export default function ProfileScreen() {
         <View style={styles.passwordSection}>
           <View style={styles.passwordHeader}>
             <KeyRound color={Colors.primary} size={18} />
-            <Text style={styles.editSectionTitle}>Смена пароля</Text>
-          </View>
-          <View style={styles.fieldCard}>
-            <Text style={styles.fieldLabel}>Текущий пароль</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={currentPassword}
-              onChangeText={setCurrentPassword}
-              placeholder="Введите текущий пароль"
-              placeholderTextColor={Colors.textMuted}
-              secureTextEntry
-              autoComplete="current-password"
-            />
-          </View>
-          <View style={styles.fieldCard}>
-            <Text style={styles.fieldLabel}>Новый пароль</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={newPassword}
-              onChangeText={setNewPassword}
-              placeholder="Минимум 8 символов"
-              placeholderTextColor={Colors.textMuted}
-              secureTextEntry
-              autoComplete="new-password"
-            />
-          </View>
-          <View style={styles.fieldCard}>
-            <Text style={styles.fieldLabel}>Подтвердите новый пароль</Text>
-            <TextInput
-              style={styles.fieldInput}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              placeholder="Повторите новый пароль"
-              placeholderTextColor={Colors.textMuted}
-              secureTextEntry
-              autoComplete="new-password"
-            />
+            <Text style={styles.editSectionTitle}>Безопасность</Text>
           </View>
           <TouchableOpacity
-            style={[styles.changePasswordButton, changePasswordMutation.isPending && styles.disabledButton]}
-            onPress={handleChangePassword}
-            disabled={changePasswordMutation.isPending}
+            style={styles.changePasswordButton}
+            onPress={() => router.push('/change-password')}
             activeOpacity={0.8}
           >
-            {changePasswordMutation.isPending ? (
-              <ActivityIndicator color={Colors.white} size="small" />
-            ) : (
-              <Text style={styles.changePasswordText}>Изменить пароль</Text>
-            )}
+            <Text style={styles.changePasswordText}>Сменить пароль</Text>
           </TouchableOpacity>
         </View>
 

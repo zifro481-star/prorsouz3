@@ -155,6 +155,62 @@ async function parseRawResponse<T>(res: Response): Promise<T | null> {
   }
 }
 
+async function parseApiError(res: Response): Promise<string> {
+  const fallback = `Ошибка сервера (${res.status})`;
+  try {
+    const text = await res.text();
+    if (!text) return fallback;
+    try {
+      const parsed = JSON.parse(text) as { error?: string };
+      if (parsed?.error) return parsed.error;
+      return fallback;
+    } catch {
+      return 'Ошибка соединения с сервером';
+    }
+  } catch {
+    return 'Ошибка соединения с сервером';
+  }
+}
+
+async function postPublicJson<T>(path: string, body: object): Promise<T> {
+  const res = await requestRawPublic(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    throw new Error(await parseApiError(res));
+  }
+
+  const parsed = await parseRawResponse<T>(res);
+  return (parsed ?? {}) as T;
+}
+
+async function postCookieAuthJson<T>(path: string, body: object): Promise<T> {
+  const token = await getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['Cookie'] = `token=${token}`;
+  }
+
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    credentials: 'include',
+  });
+
+  if (!res.ok) {
+    throw new Error(await parseApiError(res));
+  }
+
+  const parsed = await parseRawResponse<T>(res);
+  return (parsed ?? {}) as T;
+}
+
 async function tryRawJson<T>(path: string, options: RequestInit = {}): Promise<T | null> {
   try {
     const res = await requestRaw(path, options);
@@ -964,13 +1020,11 @@ export const api = {
   deleteSurvey: (id: string) =>
     tryJsonVariants<void>([`/surveys/${id}`, `/admin/surveys/${id}`, `/questionnaires/${id}`, `/polls/${id}`], {}, 'DELETE'),
 
-  changePassword: async (currentPassword: string, newPassword: string) => {
-    const result = await tryJsonVariants<void>(
-      ['/auth/change-password', '/auth/password', '/profile/password', '/users/me/password'],
-      { currentPassword, oldPassword: currentPassword, password: newPassword, newPassword, confirmPassword: newPassword }
-    );
-    if (!result) throw new Error('Не удалось изменить пароль');
-  },
+  changePassword: (currentPassword: string, newPassword: string) =>
+    postCookieAuthJson<{ success: boolean }>('/auth/change-password', {
+      currentPassword,
+      newPassword,
+    }),
 
   getLearningModules: () =>
     request<LearningModule[]>('/learning/modules'),
@@ -984,28 +1038,14 @@ export const api = {
     }),
 
   forgotPassword: (email: string) =>
-    tryJsonVariants<void>(
-      ['/auth/forgot-password', '/auth/password-reset/request', '/auth/reset-password/request', '/auth/password/reset', '/auth/reset'],
-      { email },
-      'POST',
-      true
-    ),
+    postPublicJson<{ success: boolean }>('/auth/forgot-password', { email }),
 
-  verifyResetCode: (email: string, code: string) =>
-    tryJsonVariants<void>(
-      ['/auth/verify-reset-code', '/auth/forgot-password/verify', '/auth/password-reset/verify', '/auth/reset-password/verify', '/auth/reset/verify', '/auth/password/verify'],
-      { email, code, verificationCode: code, otp: code },
-      'POST',
-      true
-    ),
-
-  resetPasswordWithCode: (email: string, code: string, password: string) =>
-    tryJsonVariants<void>(
-      ['/auth/forgot-password/confirm', '/auth/password-reset', '/auth/reset-password', '/auth/password-reset/verify', '/auth/reset-password/verify'],
-      { email, code, verificationCode: code, otp: code, token: code, resetToken: code, password, newPassword: password, confirmPassword: password, passwordConfirm: password },
-      'POST',
-      true
-    ),
+  verifyResetCode: (email: string, code: string, newPassword: string) =>
+    postPublicJson<{ success: boolean }>('/auth/forgot-password/verify', {
+      email,
+      code,
+      newPassword,
+    }),
 
   getTelegramStatus: () =>
     request<{ connected: boolean; telegramUsername?: string; telegramFirstName?: string }>('/telegram/status'),
