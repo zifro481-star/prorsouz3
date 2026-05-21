@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   RefreshControl, ActivityIndicator, Alert,
+  TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, useRouter } from 'expo-router';
@@ -28,6 +29,13 @@ function formatTime(dateStr?: string): string {
   }
   if (diffHours < 48) return 'Вчера';
   return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+function normalizeForSearch(value?: string): string {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 interface ColleagueItem {
@@ -64,6 +72,7 @@ export default function ChatsScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [hiddenChatIds, setHiddenChatIds] = useState<string[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Load hidden chats from storage
   React.useEffect(() => {
@@ -273,10 +282,50 @@ export default function ChatsScreen() {
     });
   }, [colleagues, directChats]);
 
+  const searchNorm = useMemo(() => normalizeForSearch(searchQuery), [searchQuery]);
+
+  const filteredAgents = useMemo(() => {
+    if (!searchNorm) return agents;
+    return agents.filter(a => normalizeForSearch(a.fullName).includes(searchNorm));
+  }, [agents, searchNorm]);
+
+  const filteredDirectChats = useMemo(() => {
+    if (!searchNorm) return directChats;
+    return directChats.filter(chat => {
+      const name = (chat as any).contactName || chat.participant?.fullName || '';
+      return normalizeForSearch(name).includes(searchNorm);
+    });
+  }, [directChats, searchNorm]);
+
+  const filteredColleaguesWithoutChat = useMemo(() => {
+    if (!searchNorm) return colleaguesWithoutChat;
+    return colleaguesWithoutChat.filter(c => normalizeForSearch(c.fullName).includes(searchNorm));
+  }, [colleaguesWithoutChat, searchNorm]);
+
+  const showManagerCard = useMemo(() => {
+    if (!managerName || conversations.length === 0) return false;
+    if (!searchNorm) return true;
+    return normalizeForSearch(managerName).includes(searchNorm);
+  }, [managerName, conversations.length, searchNorm]);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <Stack.Screen options={{ headerShown: false }} />
       <Text style={styles.headerTitle}>Чаты</Text>
+
+      <View style={styles.searchWrap}>
+        <TextInput
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Поиск по ФИО"
+          placeholderTextColor={Colors.textMuted}
+          autoCorrect={false}
+          autoCapitalize="none"
+          style={styles.searchInput}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+        />
+      </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -294,11 +343,11 @@ export default function ChatsScreen() {
         {!profileQuery.isLoading && isLeader ? (
           <>
             {/* ===== LEADER VIEW: show assigned members ===== */}
-            {agents.length > 0 && (
+            {filteredAgents.length > 0 && (
               <Text style={styles.sectionTitle}>Мои участники</Text>
             )}
 
-            {agents.map(agent => {
+            {filteredAgents.map(agent => {
               const conv = conversations.find((c: any) =>
                 c.agentId === agent.id || c.contactId === agent.id || c.participantId === agent.id
               );
@@ -337,13 +386,15 @@ export default function ChatsScreen() {
               );
             })}
 
-            {agents.length === 0 && !agentsQuery.isLoading && (
+            {filteredAgents.length === 0 && !agentsQuery.isLoading && (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
                   <Users color={Colors.textMuted} size={40} />
                 </View>
-                <Text style={styles.emptyTitle}>Нет участников</Text>
-                <Text style={styles.emptySubtext}>Закреплённые за вами участники появятся здесь</Text>
+                <Text style={styles.emptyTitle}>{searchNorm ? 'Ничего не найдено' : 'Нет участников'}</Text>
+                <Text style={styles.emptySubtext}>
+                  {searchNorm ? 'Попробуйте изменить запрос' : 'Закреплённые за вами участники появятся здесь'}
+                </Text>
               </View>
             )}
 
@@ -357,7 +408,7 @@ export default function ChatsScreen() {
           <>
             {/* ===== MEMBER VIEW: manager + colleagues ===== */}
             {/* Manager chat — always on top */}
-            {managerName && conversations.length > 0 && (
+            {showManagerCard && (
               <TouchableOpacity
                 style={styles.leaderCard}
                 onPress={handleManagerPress}
@@ -387,12 +438,12 @@ export default function ChatsScreen() {
             )}
 
             {/* Section title */}
-            {(directChats.length > 0 || colleaguesWithoutChat.length > 0) && (
+            {(filteredDirectChats.length > 0 || filteredColleaguesWithoutChat.length > 0) && (
               <Text style={styles.sectionTitle}>Участники</Text>
             )}
 
             {/* Existing direct chats */}
-            {directChats.map(chat => {
+            {filteredDirectChats.map(chat => {
               const name = (chat as any).contactName || chat.participant?.fullName || 'Участник';
               return (
                 <TouchableOpacity
@@ -424,7 +475,7 @@ export default function ChatsScreen() {
             })}
 
             {/* Colleagues without chat yet */}
-            {colleaguesWithoutChat.map(c => (
+            {filteredColleaguesWithoutChat.map(c => (
               <TouchableOpacity
                 key={`col-${c.id}`}
                 style={styles.chatCard}
@@ -442,13 +493,15 @@ export default function ChatsScreen() {
             ))}
 
             {/* Empty state */}
-            {directChats.length === 0 && conversations.length === 0 && colleaguesWithoutChat.length === 0 && !directChatsQuery.isLoading && !colleaguesQuery.isLoading && (
+            {filteredDirectChats.length === 0 && !showManagerCard && filteredColleaguesWithoutChat.length === 0 && !directChatsQuery.isLoading && !colleaguesQuery.isLoading && (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIcon}>
                   <MessageSquare color={Colors.textMuted} size={40} />
                 </View>
-                <Text style={styles.emptyTitle}>Нет диалогов</Text>
-                <Text style={styles.emptySubtext}>Здесь появятся чаты с руководителем и коллегами</Text>
+                <Text style={styles.emptyTitle}>{searchNorm ? 'Ничего не найдено' : 'Нет диалогов'}</Text>
+                <Text style={styles.emptySubtext}>
+                  {searchNorm ? 'Попробуйте изменить запрос' : 'Здесь появятся чаты с руководителем и коллегами'}
+                </Text>
               </View>
             )}
 
@@ -483,6 +536,20 @@ const styles = StyleSheet.create({
     color: Colors.text,
     paddingHorizontal: 20,
     paddingVertical: 12,
+  },
+  searchWrap: {
+    paddingHorizontal: 20,
+    paddingBottom: 6,
+  },
+  searchInput: {
+    height: 44,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.cardBorder,
+    color: Colors.text,
+    fontSize: 15,
   },
   scrollContent: {
     paddingHorizontal: 20,

@@ -18,12 +18,12 @@ export default function LoadingScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
   },
   logo: {
-    width: width * 0.6,
-    height: width * 0.6 * (768 / 1376),
+    width: width * 0.52,
+    height: width * 0.52,
   },
 });

@@ -7,6 +7,8 @@ ssh_cmd.py
 node_modules/
 .expo/
 .jdk/
+.gradle-local/
+.tools/
 dist/
 build/
 .gradle/
